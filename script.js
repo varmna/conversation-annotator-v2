@@ -22,8 +22,9 @@ const tool = {
 const elements = {
     uploadScreen: document.getElementById('upload-screen'),
     mainInterface: document.getElementById('main-interface'),
-    fileInput: document.getElementById('excel-upload'),
     uploadBox: document.getElementById('upload-box'),
+    fileInput: document.getElementById('excel-upload'),
+    uploadStatus: document.getElementById('upload-status'),
     conversationDisplay: document.getElementById('conversation-display'),
     conversationInfo: document.getElementById('conversation-info'),
     bucketArea: document.getElementById('bucket-area'),
@@ -50,6 +51,7 @@ function createBucketUI() {
                     placeholder="Add comments for ${bucket}" 
                     name="${bucket}"
                     rows="3"
+                    disabled
                 ></textarea>
             </div>
         `;
@@ -57,10 +59,19 @@ function createBucketUI() {
     });
 }
 
-// File upload handler
+// File Upload Handling
+elements.uploadBox.addEventListener('click', () => {
+    elements.fileInput.click();
+});
+
 elements.fileInput.addEventListener('change', async (event) => {
+    console.log('File input change event triggered');
     const file = event.target.files[0];
-    if (!file) return;
+    
+    if (!file) {
+        showStatus('⚠️ No file selected', 'warning');
+        return;
+    }
 
     if (!file.name.endsWith('.xlsx')) {
         showStatus('❌ Please select an Excel (.xlsx) file', 'error');
@@ -70,6 +81,7 @@ elements.fileInput.addEventListener('change', async (event) => {
     try {
         showLoading(true);
         showStatus('📂 Loading file...', 'info');
+        console.log('Processing file:', file.name);
 
         const data = await readExcelFile(file);
         
@@ -77,42 +89,81 @@ elements.fileInput.addEventListener('change', async (event) => {
             throw new Error('No data found in file');
         }
 
+        console.log('Data loaded successfully:', data.length, 'rows');
         processExcelData(data);
+        
         elements.uploadScreen.style.display = 'none';
         elements.mainInterface.style.display = 'flex';
         showStatus('✅ File loaded successfully!', 'success');
     } catch (error) {
-        console.error('Error:', error);
-        showStatus('❌ Error loading file: ' + error.message, 'error');
+        console.error('Error processing file:', error);
+        showStatus('❌ Error: ' + (error.message || 'Failed to load file'), 'error');
     } finally {
         showLoading(false);
     }
 });
 
-// Read Excel file
+// Drag and drop handling
+elements.uploadBox.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    elements.uploadBox.classList.add('dragover');
+});
+
+elements.uploadBox.addEventListener('dragleave', () => {
+    elements.uploadBox.classList.remove('dragover');
+});
+
+elements.uploadBox.addEventListener('drop', (e) => {
+    e.preventDefault();
+    elements.uploadBox.classList.remove('dragover');
+    
+    const file = e.dataTransfer.files[0];
+    if (file && file.name.endsWith('.xlsx')) {
+        elements.fileInput.files = e.dataTransfer.files;
+        elements.fileInput.dispatchEvent(new Event('change'));
+    } else {
+        showStatus('❌ Please select an Excel (.xlsx) file', 'error');
+    }
+});
+// Excel file reading function
 async function readExcelFile(file) {
     return new Promise((resolve, reject) => {
         const reader = new FileReader();
+        
         reader.onload = (e) => {
             try {
+                console.log('File read complete, parsing data...');
                 const data = new Uint8Array(e.target.result);
-                const workbook = XLSX.read(data, {type: 'a 'array'});
+                const workbook = XLSX.read(data, {type: 'array'});
+                
+                console.log('Available sheets:', workbook.SheetNames);
                 const sheetName = workbook.SheetNames[0];
                 const sheet = workbook.Sheets[sheetName];
-                resolve(XLSX.utils.sheet_to_json(sheet));
+                const jsonData = XLSX.utils.sheet_to_json(sheet);
+                
+                console.log('Parsed data:', jsonData.length, 'rows');
+                resolve(jsonData);
             } catch (error) {
-                reject(error);
+                console.error('Error parsing Excel:', error);
+                reject(new Error('Failed to parse Excel file'));
             }
         };
-        reader.onerror = reject;
+        
+        reader.onerror = (error) => {
+            console.error('FileReader error:', error);
+            reject(new Error('Failed to read file'));
+           };
+        
         reader.readAsArrayBuffer(file);
     });
 }
 
 // Process Excel data
 function processExcelData(rawData) {
-    // Group conversations by Id
+    console.log('Processing data...');
     const groupedData = {};
+    
+    // Group conversations by Id
     rawData.forEach(row => {
         if (!groupedData[row.Id]) {
             groupedData[row.Id] = [];
@@ -124,6 +175,7 @@ function processExcelData(rawData) {
     tool.currentIndex = 0;
     tool.annotations = {};
     
+    console.log('Processed conversations:', tool.conversations.length);
     updateProgressBar();
     displayConversation();
 }
@@ -229,18 +281,6 @@ function loadAnnotations() {
         }
     });
 }
-
-// Enable/disable textarea based on checkbox
-elements.bucketArea.addEventListener('change', (e) => {
-    if (e.target.type === 'checkbox') {
-        const textarea = e.target.closest('.bucket').querySelector('textarea');
-        textarea.disabled = !e.target.checked;
-        if (e.target.checked) {
-            textarea.focus();
-        }
-    }
-});
-
 // Show status message
 function showStatus(message, type) {
     elements.statusMessage.textContent = message;
@@ -257,29 +297,29 @@ function showLoading(show) {
     elements.loadingSpinner.style.display = show ? 'flex' : 'none';
 }
 
-// Navigation handlers
-elements.prevBtn.addEventListener('click', () => {
-    if (tool.currentIndex > 0) {
-        tool.currentIndex--;
-        displayConversation();
-    } else {
-        showStatus('⚠️ This is the first conversation', 'warning');
+// Enable/disable textarea based on checkbox
+elements.bucketArea.addEventListener('change', (e) => {
+    if (e.target.type === 'checkbox') {
+        const textarea = e.target.closest('.bucket').querySelector('textarea');
+        textarea.disabled = !e.target.checked;
+        if (e.target.checked) {
+            textarea.focus();
+        }
     }
 });
 
-elements.nextBtn.addEventListener('click', () => {
-    if (tool.currentIndex < tool.conversations.length - 1) {
-        tool.currentIndex++;
-        displayConversation();
-    } else {
-        showStatus('⚠️ This is the last conversation', 'warning');
+// Helper function for Excel binary conversion
+function s2ab(s) {
+    const buf = new ArrayBuffer(s.length);
+    const view = new Uint8Array(buf);
+    for (let i = 0; i < s.length; i++) {
+        view[i] = s.charCodeAt(i) & 0xFF;
     }
-});
+    return buf;
+}
 
-elements.saveBtn.addEventListener('click', saveCurrentAnnotations);
-
-// Download handler
-elements.downloadBtn.addEventListener('click', () => {
+// Download annotations
+elements.downloadBtn.addEventListener('click', async () => {
     try {
         if (Object.keys(tool.annotations).length === 0) {
             showStatus('⚠️ No annotations to download', 'warning');
@@ -322,17 +362,14 @@ elements.downloadBtn.addEventListener('click', () => {
             }
         });
 
-        // Create Excel file
         const ws = XLSX.utils.json_to_sheet(annotatedData);
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, ws, "Annotations");
 
-        // Convert to binary string
         const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'binary' });
         const blob = new Blob([s2ab(wbout)], { type: 'application/octet-stream' });
         const url = window.URL.createObjectURL(blob);
 
-        // Trigger download
         const a = document.createElement('a');
         a.href = url;
         const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -353,38 +390,58 @@ elements.downloadBtn.addEventListener('click', () => {
     }
 });
 
-// Helper function for Excel binary conversion
-function s2ab(s) {
-    const buf = new ArrayBuffer(s.length);
-    const view = new Uint8Array(buf);
-    for (let i = 0; i < s.length; i++) {
-        view[i] = s.charCodeAt(i) & 0xFF;
+// Navigation handlers
+elements.prevBtn.addEventListener('click', () => {
+    if (tool.currentIndex > 0) {
+        tool.currentIndex--;
+        displayConversation();
+    } else {
+        showStatus('⚠️ This is the first conversation', 'warning');
     }
-    return buf;
-}
+});
 
-// Initialize
+elements.nextBtn.addEventListener('click', () => {
+    if (tool.currentIndex < tool.conversations.length - 1) {
+        tool.currentIndex++;
+        displayConversation();
+    } else {
+        showStatus('⚠️ This is the last conversation', 'warning');
+    }
+});
+
+// Save button handler
+elements.saveBtn.addEventListener('click', saveCurrentAnnotations);
+
+// Keyboard navigation
+document.addEventListener('keydown', (e) => {
+    if (elements.mainInterface.style.display === 'none') return;
+    
+    if (e.key === 'ArrowLeft') {
+        elements.prevBtn.click();
+    } else if (e.key === 'ArrowRight') {
+        elements.nextBtn.click();
+    } else if (e.key === 's' && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        elements.saveBtn.click();
+    }
+});
+
+// Initialize the tool
 createBucketUI();
 
-// Drag and drop support
-elements.uploadBox.addEventListener('dragover', (e) => {
-    e.preventDefault();
-    elements.uploadBox.classList.add('dragover');
-});
-
-elements.uploadBox.addEventListener('dragleave', () => {
-    elements.uploadBox.classList.remove('dragover');
-});
-
-elements.uploadBox.addEventListener('drop', (e) => {
-    e.preventDefault();
-    elements.uploadBox.classList.remove('dragover');
-    
-    const file = e.dataTransfer.files[0];
-    if (file && file.name.endsWith('.xlsx')) {
-        elements.fileInput.files = e.dataTransfer.files;
-        elements.fileInput.dispatchEvent(new Event('change'));
-    } else {
-        showStatus('❌ Please select an Excel (.xlsx) file', 'error');
+// Handle window resize
+window.addEventListener('resize', () => {
+    if (elements.mainInterface.style.display !== 'none') {
+        updateProgressBar();
     }
 });
+
+// Prevent accidental navigation
+window.addEventListener('beforeunload', (e) => {
+    if (Object.keys(tool.annotations).length > 0) {
+        e.preventDefault();
+        e.returnValue = '';
+    }
+});
+
+console.log('Tool initialized and ready! 🚀');
